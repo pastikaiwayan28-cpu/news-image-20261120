@@ -3,7 +3,8 @@
 
 Copies the entry.png beside this file to /output/entry.png, byte for
 byte, after validating it: PNG signature, IHDR dimensions 1024x1024,
-total size at most 1 MiB, and a complete IEND chunk (no truncation).
+total size at most 1 MiB, a complete IEND chunk (no truncation), and
+the CRC32 of every chunk (no corrupt chunk passes).
 Verifies the copy by comparing SHA-256 hashes.
 
 Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for
@@ -15,6 +16,7 @@ import hashlib
 import os
 import struct
 import sys
+import zlib
 
 MAX_BYTES = 1 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -38,7 +40,8 @@ def validate_png(data):
     width, height = struct.unpack(">II", data[16:24])
     if (width, height) != (1024, 1024):
         fail(f"entry.png is {width}x{height}, must be 1024x1024")
-    # Walk the chunk list to confirm a well-formed file ending in IEND.
+    # Walk the chunk list to confirm a well-formed file ending in IEND,
+    # verifying each chunk's CRC32 so a corrupt chunk cannot pass.
     pos = 8
     seen_iend = False
     while pos + 8 <= len(data):
@@ -46,6 +49,10 @@ def validate_png(data):
         end = pos + 8 + length + 4  # chunk header + data + CRC
         if end > len(data):
             fail(f"entry.png is truncated inside {ctype!r} chunk")
+        stored_crc, = struct.unpack(">I", data[pos + 8 + length:end])
+        actual_crc = zlib.crc32(ctype + data[pos + 8:pos + 8 + length]) & 0xFFFFFFFF
+        if stored_crc != actual_crc:
+            fail(f"entry.png has a bad CRC32 in {ctype!r} chunk")
         if ctype == b"IEND":
             if length != 0 or end != len(data):
                 fail("entry.png has trailing data after IEND")
